@@ -116,13 +116,30 @@ class DiagramView(QGraphicsView):
         event.accept()
         
     def reset_view(self):
-        """Reset the view to default zoom and position"""
-        # Reset transformation
-        self.resetTransform()
-        self.current_zoom = 1.0
+        """Fit all notes in view at once"""
+        # Find the bounding rectangle of all notes
+        items_rect = self.scene().itemsBoundingRect()
         
-        # Center the scene's view
-        self.centerOn(0, 0)
+        # Only proceed if we have items
+        if not items_rect.isEmpty():
+            # Add some padding (10% on each side)
+            padding_x = items_rect.width() * 0.1
+            padding_y = items_rect.height() * 0.1
+            items_rect.adjust(-padding_x, -padding_y, padding_x, padding_y)
+            
+            # Fit the view to this rectangle
+            self.fitInView(items_rect, Qt.KeepAspectRatio)
+            
+            # Store the current zoom level based on the fit
+            viewport_rect = self.viewport().rect()
+            zoom_x = viewport_rect.width() / items_rect.width()
+            zoom_y = viewport_rect.height() / items_rect.height()
+            self.current_zoom = min(zoom_x, zoom_y)
+        else:
+            # If no items, just reset to default
+            self.resetTransform()
+            self.current_zoom = 1.0
+            self.centerOn(0, 0)
         
         # Update window title
         if hasattr(self, 'parent') and self.parent() and isinstance(self.parent(), MainWindow):
@@ -1427,10 +1444,10 @@ class MainWindow(QMainWindow):
         refresh_button.setStyleSheet("color: #4caf50;")  # Green color for the icon
         
         # Add reset view button
-        reset_view_button = QPushButton("🏠")
+        reset_view_button = QPushButton("🔍")  # Changed from 🏠 to 🔍 for zoom/fit
         reset_view_button.clicked.connect(self.view.reset_view)
         reset_view_button.setFixedWidth(40)
-        reset_view_button.setToolTip("Reset view")
+        reset_view_button.setToolTip("Fit all notes in view")
         
         # Add export button
         export_button = QPushButton("💾")
@@ -2421,6 +2438,9 @@ class MainWindow(QMainWindow):
                 painter.end()
                 
                 # Create a minimal HTML file with the SVG embedded
+                # Extract the background color in hex format for HTML
+                bg_color_hex = background_color.name()
+                
                 html_content = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -2430,6 +2450,7 @@ class MainWindow(QMainWindow):
             margin: 0;
             padding: 0;
             overflow: hidden;
+            background-color: {bg_color_hex};
         }}
         svg {{ 
             width: 100%;
