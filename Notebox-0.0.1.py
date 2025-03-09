@@ -1,13 +1,22 @@
 import sys
 import os
+import json
 import subprocess
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QGraphicsScene, QGraphicsView, 
-                             QGraphicsItem, QDockWidget, QPushButton, QVBoxLayout, QWidget,
-                             QGraphicsTextItem, QUndoStack, QUndoCommand, QHBoxLayout,
-                             QShortcut, QFileDialog, QMessageBox)
-from PyQt5.QtCore import Qt, QRectF, QPointF, QBuffer, QIODevice, QSizeF
-from PyQt5.QtGui import QColor, QBrush, QPen, QFont, QPainter, QCursor, QKeySequence, QImage, QPixmap
+import datetime
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QGraphicsView, QGraphicsScene, 
+    QGraphicsItem, QGraphicsTextItem, QVBoxLayout, QHBoxLayout, 
+    QPushButton, QWidget, QFrame, QLabel, QShortcut, QUndoCommand, 
+    QUndoStack, QFileDialog, QMessageBox, QGraphicsRectItem, QMenu,
+    QAction, QComboBox
+)
+from PyQt5.QtCore import Qt, QRectF, QTimer, QPoint, QPointF, QEvent, QLineF, QSizeF, QSize
+from PyQt5.QtGui import (
+    QBrush, QPen, QColor, QFont, QTextCursor, QKeySequence, 
+    QPainter, QImage, QPixmap, QTextDocument, QIcon, QCursor
+)
 from PyQt5.QtSvg import QSvgGenerator
+from PyQt5.QtPrintSupport import QPrinter
 
 class DiagramView(QGraphicsView):
     def __init__(self, scene):
@@ -39,7 +48,7 @@ class DiagramView(QGraphicsView):
         if event.button() == Qt.MiddleButton:
             self.panning = True
             self.last_pan_point = event.pos()
-            self.setCursor(QCursor(Qt.ClosedHandCursor))
+            self.setCursor(Qt.ClosedHandCursor)  # Use the cursor enum directly
             event.accept()
         else:
             super().mousePressEvent(event)
@@ -249,7 +258,7 @@ class StickyNote(QGraphicsItem):
 
         # Title text item
         self.title_item = QGraphicsTextItem(self)
-        self.title_item.setTextInteractionFlags(Qt.TextEditorInteraction)
+        self.title_item.setTextInteractionFlags(Qt.NoTextInteraction)  # Disable text interaction by default
         self.title_item.setPos(5, 5)
         self.title_item.setFont(QFont("Arial", 12, QFont.Bold))
         self.title_item.setDefaultTextColor(Qt.white)  # White text for title
@@ -258,7 +267,7 @@ class StickyNote(QGraphicsItem):
 
         # Description text item
         self.desc_item = QGraphicsTextItem(self)
-        self.desc_item.setTextInteractionFlags(Qt.TextEditorInteraction)
+        self.desc_item.setTextInteractionFlags(Qt.NoTextInteraction)  # Disable text interaction by default
         self.desc_item.setPos(5, 30)
         self.desc_item.setFont(QFont("Arial", 11))
         self.desc_item.setDefaultTextColor(Qt.white)  # White text for description
@@ -272,12 +281,7 @@ class StickyNote(QGraphicsItem):
         return self.rect
 
     def mousePressEvent(self, event):
-        # Ignore if we're editing text
-        if self.title_item.hasFocus() or self.desc_item.hasFocus():
-            super().mousePressEvent(event)
-            return
-
-        # Set dragging flag
+        # Set dragging flag regardless of where on the note the mouse is pressed
         self.is_being_dragged = True
         self.drag_target_index = -1
         
@@ -300,13 +304,29 @@ class StickyNote(QGraphicsItem):
             main_window = self.scene().views()[0].parent()
             if isinstance(main_window, MainWindow):
                 # Explicitly pass this note to update controls
-                print(f"Selecting note ID: {id(self)}, is_container: {self.is_container}")
+                print(f"Setting selected note to {id(self)}")
                 main_window.update_arrangement_controls(self)
 
         if event.button() == Qt.LeftButton:
             self.setZValue(2)  # Bring to front while dragging
-            self.setCursor(Qt.ClosedHandCursor)
+            self.setCursor(Qt.ClosedHandCursor)  # Use the cursor enum directly
+        
+        # Call the parent class method to ensure proper event handling
         super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        # Only handle text editing on double-click
+        if self.title_item.boundingRect().contains(event.pos() - self.title_item.pos()):
+            # Enable text editing for title
+            self.title_item.setTextInteractionFlags(Qt.TextEditorInteraction)
+            self.title_item.setFocus()
+            self.is_being_dragged = False
+        elif self.desc_item.boundingRect().contains(event.pos() - self.desc_item.pos()):
+            # Enable text editing for description
+            self.desc_item.setTextInteractionFlags(Qt.TextEditorInteraction)
+            self.desc_item.setFocus()
+            self.is_being_dragged = False
+        super().mouseDoubleClickEvent(event)
 
     def find_non_overlapping_position(self, pos, container):
         """Find the nearest non-overlapping position for a note in a grid pattern"""
@@ -382,19 +402,13 @@ class StickyNote(QGraphicsItem):
         return QPointF(padding, max_bottom + padding)
 
     def mouseMoveEvent(self, event):
-        # Ignore if we're editing text
-        if self.title_item.hasFocus() or self.desc_item.hasFocus():
-            super().mouseMoveEvent(event)
-            return
-
-        # Handle the move
+        # Handle the move using parent class first
         super().mouseMoveEvent(event)
 
         # If we're in a container, handle movement based on arrangement mode
-        if self.contained_by:
+        if self.contained_by and self.is_being_dragged:
             # Calculate position among siblings for insertion preview
-            if self.is_being_dragged:
-                self.update_drag_target()
+            self.update_drag_target()
 
             if hasattr(self.contained_by, 'arrangement_mode') and self.contained_by.arrangement_mode == 'free':
                 # Free movement mode - handle dragging within parent or disconnecting if dragged too far
@@ -417,14 +431,15 @@ class StickyNote(QGraphicsItem):
                     pos.y() > max_y - disconnect_margin):
                     
                     # Disconnect from container
-                    parent = self.contained_by
                     scene_pos = self.scenePos()
+                    
+                    # Store old container for later reference
+                    old_container = self.contained_by
                     
                     # Block signals to prevent recursive calls
                     self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, False)
                     
                     # Disconnect
-                    old_container = self.contained_by
                     self.contained_by = None
                     self.setParentItem(None)
                     self.setPos(scene_pos)
@@ -433,8 +448,11 @@ class StickyNote(QGraphicsItem):
                     self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
                     
                     # Update old container
-                    if old_container and not hasattr(old_container, '_resizing'):
+                    if old_container and old_container.scene() and not hasattr(old_container, '_resizing'):
                         old_container.check_and_resize()
+                    
+                    # Update color for top-level note
+                    self.update_color_for_nesting()
                     
                     # Show highlights for potential new containers
                     items = self.scene().items(scene_pos)
@@ -470,16 +488,18 @@ class StickyNote(QGraphicsItem):
                 # Update container size
                 if not hasattr(self.contained_by, '_resizing'):
                     self.contained_by.check_and_resize()
-        else:
-            # Original highlight logic for potential containers
+        elif self.is_being_dragged:
+            # Logic for top-level notes (not in a container)
             pos = self.mapToScene(event.pos())
             items = self.scene().items(pos)
 
+            # Check for potential containers to highlight
             for item in self.scene().items():
                 if isinstance(item, StickyNote) and item != self:
                     item.color = item.base_color  # Reset to base color
                     item.update()
 
+            # Highlight potential container under cursor
             for item in items:
                 if isinstance(item, StickyNote) and item != self:
                     item.color = QColor(80, 100, 140)  # Highlight with a brighter blue for dark theme
@@ -493,23 +513,25 @@ class StickyNote(QGraphicsItem):
         # Reset opacity to fully opaque
         self.setOpacity(1.0)
         
-        # Reset dragging flags
+        # Cache dragging flags before resetting
         was_dragging = self.is_being_dragged
-        self.is_being_dragged = False
         drag_target = self.drag_target_index
+        
+        # Reset dragging flags
+        self.is_being_dragged = False
         self.drag_target_index = -1
         
         # Force update to remove insertion preview
         if self.contained_by:
             self.contained_by.update()
-
+            
         # Handle rearrangement if we have a valid insertion target
         if was_dragging and self.contained_by and drag_target >= 0:
             self.rearrange_at_position(drag_target)
 
-        # Get items under cursor
-        pos = self.mapToScene(event.pos())
-        items = self.scene().items(pos)
+        # Get items under cursor for container detection
+        scene_pos = self.scenePos()
+        items = self.scene().items(scene_pos)
 
         # Reset highlight colors (blue highlighting during drag)
         for item in self.scene().items():
@@ -571,6 +593,7 @@ class StickyNote(QGraphicsItem):
         else:
             # We're being dropped outside any container
             if old_container:
+                print(f"Detaching note {id(self)} from container {id(old_container)}")
                 # Remember scene position before removing parent
                 scene_pos = self.scenePos()
                 
@@ -585,9 +608,19 @@ class StickyNote(QGraphicsItem):
                 # Ensure old container rearranges its remaining children
                 if old_container.scene():
                     old_container.rearrange_children_with_spacing()
-
-        super().mouseReleaseEvent(event)
         
+        # After handling containers, check if text interaction should be disabled
+        # If the mouse was released outside text areas, clear focus and disable interaction
+        pos = event.pos()
+        if not (self.title_item.boundingRect().contains(pos - self.title_item.pos()) or 
+                self.desc_item.boundingRect().contains(pos - self.desc_item.pos())):
+            # Clear any text selection and disable text interaction
+            self.title_item.clearFocus()
+            self.desc_item.clearFocus() 
+            self.clear_text_selection()
+        
+        super().mouseReleaseEvent(event)
+
     def rearrange_children_with_spacing(self):
         """Rearrange children to ensure proper spacing and prevent overlaps"""
         if not self.is_container or not self.scene():
@@ -793,6 +826,14 @@ class StickyNote(QGraphicsItem):
         # Use a slightly brighter border for dark notes
         painter.setPen(QPen(QColor(100, 100, 120), 1.5))
         painter.drawRect(self.rect)
+
+        # Draw title underline
+        title_height = self.title_item.boundingRect().height()
+        underline_y = title_height + 5  # Position just below the title
+        painter.setPen(QPen(QColor(255, 255, 255, 80), 1))  # Faint white line (80 alpha)
+        start_point = QPointF(5, underline_y)
+        end_point = QPointF(self.rect.width() - 5, underline_y)
+        painter.drawLine(start_point, end_point)
 
         # Draw selection highlight
         if self.is_selected:
@@ -1221,10 +1262,18 @@ class StickyNote(QGraphicsItem):
         title_cursor.clearSelection()
         self.title_item.setTextCursor(title_cursor)
         
+        # Disable text interaction if not focused
+        if not self.title_item.hasFocus():
+            self.title_item.setTextInteractionFlags(Qt.NoTextInteraction)
+        
         # Clear description text selection if exists
         desc_cursor = self.desc_item.textCursor()
         desc_cursor.clearSelection()
         self.desc_item.setTextCursor(desc_cursor)
+        
+        # Disable text interaction if not focused
+        if not self.desc_item.hasFocus():
+            self.desc_item.setTextInteractionFlags(Qt.NoTextInteraction)
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -1243,6 +1292,24 @@ class MainWindow(QMainWindow):
     def initUI(self):
         self.setWindowTitle('Sticky Notes')
         self.setGeometry(100, 100, 1000, 800)
+
+        # Create and set the window icon (simple box)
+        self.create_window_icon()
+        
+        # Set dark title bar (Windows-specific)
+        if sys.platform == 'win32':
+            try:
+                # Windows-specific dark title bar
+                import ctypes
+                DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+                HWND = int(self.winId())
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    HWND, DWMWA_USE_IMMERSIVE_DARK_MODE, 
+                    ctypes.byref(ctypes.c_int(1)), 
+                    ctypes.sizeof(ctypes.c_int)
+                )
+            except Exception as e:
+                print(f"Error setting dark title bar: {str(e)}")
 
         # Center window on screen
         screen = QApplication.primaryScreen().geometry()
@@ -1283,16 +1350,6 @@ class MainWindow(QMainWindow):
         add_button.clicked.connect(self.addNote)
         add_button.setFixedWidth(120)
         
-        undo_button = QPushButton("↶")
-        undo_button.clicked.connect(self.undo_stack.undo)
-        undo_button.setFixedWidth(40)
-        undo_button.setToolTip("Undo")
-        
-        redo_button = QPushButton("↷")
-        redo_button.clicked.connect(self.undo_stack.redo)
-        redo_button.setFixedWidth(40)
-        redo_button.setToolTip("Redo")
-        
         # Add delete button with red color
         delete_button = QPushButton("🗑️")
         delete_button.setObjectName("delete_button")  # For CSS styling
@@ -1318,28 +1375,20 @@ class MainWindow(QMainWindow):
         self.auto_save_button.setFixedWidth(150)
         self.auto_save_button.setToolTip("Toggle automatic saving")
         
-        # Add open/save buttons
-        open_button = QPushButton("📂 Open")
-        open_button.clicked.connect(self.open_diagram)
-        open_button.setFixedWidth(80)
-        open_button.setToolTip("Open saved diagram (Ctrl+O)")
-        
-        save_button = QPushButton("💾 Save")
-        save_button.clicked.connect(self.save_diagram_as)
-        save_button.setFixedWidth(80)
-        save_button.setToolTip("Save diagram (Ctrl+S)")
+        # Add export button
+        export_button = QPushButton("📤 Export")
+        export_button.clicked.connect(self.export_canvas)
+        export_button.setFixedWidth(80)
+        export_button.setToolTip("Export diagram (Ctrl+E)")
         
         # Add buttons to toolbar
         toolbar_layout.addWidget(add_button)
-        toolbar_layout.addWidget(undo_button)
-        toolbar_layout.addWidget(redo_button)
         toolbar_layout.addWidget(delete_button)
         toolbar_layout.addWidget(refresh_button)
         toolbar_layout.addWidget(reset_view_button)
         toolbar_layout.addWidget(self.auto_save_button)
         
-        toolbar_layout.addWidget(open_button)
-        toolbar_layout.addWidget(save_button)
+        toolbar_layout.addWidget(export_button)
         
         # Add separator
         separator = QWidget()
@@ -1429,6 +1478,42 @@ class MainWindow(QMainWindow):
             }
             #delete_button:hover {
                 background-color: #aa4a4a;
+            }
+            QScrollBar:vertical {
+                background-color: #121212; /* Almost black background */
+                width: 12px;
+                margin: 0px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #333333; /* Dark gray handle for contrast */
+                min-height: 20px;
+                border: 1px solid #444444;
+                border-radius: 4px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+                background-color: #121212; /* Match the scrollbar background */
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background-color: #121212; /* Make sure the paging area is also black */
+            }
+            QScrollBar:horizontal {
+                background-color: #121212; /* Almost black background */
+                height: 12px;
+                margin: 0px;
+            }
+            QScrollBar::handle:horizontal {
+                background-color: #333333; /* Dark gray handle for contrast */
+                min-width: 20px;
+                border: 1px solid #444444;
+                border-radius: 4px;
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                width: 0px;
+                background-color: #121212; /* Match the scrollbar background */
+            }
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+                background-color: #121212; /* Make sure the paging area is also black */
             }
         """)
         
@@ -1709,6 +1794,11 @@ class MainWindow(QMainWindow):
         save_shortcut.activated.connect(self.save_canvas_as_image)
         save_shortcut.setContext(Qt.ApplicationShortcut)
         
+        # Export canvas shortcut (Ctrl+E)
+        export_shortcut = QShortcut(QKeySequence("Ctrl+E"), self)
+        export_shortcut.activated.connect(self.export_canvas)
+        export_shortcut.setContext(Qt.ApplicationShortcut)
+        
         # Delete note shortcut (Delete key)
         delete_shortcut = QShortcut(QKeySequence("Delete"), self)
         delete_shortcut.activated.connect(self.delete_selected_note)
@@ -1724,12 +1814,9 @@ class MainWindow(QMainWindow):
         paste_shortcut.activated.connect(self.paste_text_from_clipboard)
         paste_shortcut.setContext(Qt.ApplicationShortcut)
         
-        # Add save/open shortcuts
+        # Add save shortcut
         save_shortcut = QShortcut(QKeySequence("Ctrl+S"), self)
         save_shortcut.activated.connect(self.save_diagram_as)
-        
-        open_shortcut = QShortcut(QKeySequence("Ctrl+O"), self)
-        open_shortcut.activated.connect(self.open_diagram)
 
     def duplicate_selected_note(self):
         """Duplicate the currently selected note"""
@@ -1990,104 +2077,61 @@ class MainWindow(QMainWindow):
             print(f"Error saving canvas as image: {str(e)}")
 
     def toggle_auto_save(self):
-        if not self.auto_save_enabled:
-            # Enable auto-save
-            file_name, _ = QFileDialog.getSaveFileName(self, "Set Auto-Save File", "", 
-                                                      "JSON Files (*.json);;All Files (*)")
-            if file_name:
-                self.auto_save_file = file_name
-                self.auto_save_enabled = True
-                self.auto_save_button.setText("🔄 Auto-Save: On")
-                
-                # Create and start timer
-                if not self.auto_save_timer:
-                    self.auto_save_timer = self.startTimer(self.auto_save_interval)
-                    QMessageBox.information(self, "Auto-Save Enabled", 
-                                           f"Auto-saving every {self.auto_save_interval/60000} minutes to:\n{self.auto_save_file}")
+        """Toggle automatic saving on/off"""
+        self.auto_save_enabled = not self.auto_save_enabled
+        
+        if self.auto_save_enabled:
+            self.auto_save_button.setText("🔄 Auto-Save: On")
+            # Start the timer if not already started
+            if not self.auto_save_timer.isActive():
+                self.auto_save_timer.start(30000)  # 30 seconds
         else:
-            # Disable auto-save
-            self.auto_save_enabled = False
             self.auto_save_button.setText("🔄 Auto-Save: Off")
-            if self.auto_save_timer:
-                self.killTimer(self.auto_save_timer)
-                self.auto_save_timer = None
-                QMessageBox.information(self, "Auto-Save Disabled", "Auto-save has been turned off.")
-    
+            # Stop the timer
+            if self.auto_save_timer.isActive():
+                self.auto_save_timer.stop()
+
     def timerEvent(self, event):
         # Auto-save the canvas
-        if self.auto_save_enabled and self.auto_save_file:
-            try:
-                # Use the existing save functionality
+        if event.timerId() == self.auto_save_timer.timerId():
+            if self.auto_save_enabled and self.auto_save_file:
                 self.save_diagram(self.auto_save_file)
                 print(f"Auto-saved to {self.auto_save_file}")
-            except Exception as e:
-                print(f"Auto-save failed: {str(e)}")
 
     def save_diagram_as(self):
-        """Save the current diagram to a JSON file"""
+        """Save the diagram to a JSON file"""
         file_name, _ = QFileDialog.getSaveFileName(self, "Save Diagram", "", 
                                                   "JSON Files (*.json);;All Files (*)")
         if file_name:
             self.save_diagram(file_name)
-            
+
     def save_diagram(self, file_path):
         """Save the diagram to the specified file path"""
         try:
+            # Create a dictionary to store all notes
             diagram_data = {
-                'notes': []
+                "notes": []
             }
             
-            # Create a map of object ids to persistent ids for this save operation
-            id_map = {}
-            persistent_id = 0
-            
-            # First pass: assign persistent IDs
+            # Get all notes in the scene
             for item in self.scene.items():
                 if isinstance(item, StickyNote):
-                    id_map[id(item)] = persistent_id
-                    persistent_id += 1
+                    # Skip child notes, we'll save them with their parents
+                    if item.parentItem():
+                        continue
+                        
+                    # Get note data
+                    note_data = self._save_note_recursive(item)
+                    diagram_data["notes"].append(note_data)
             
-            # Second pass: collect all notes with mapped IDs
-            for item in self.scene.items():
-                if isinstance(item, StickyNote):
-                    # Get note position
-                    pos = item.pos()
-                    
-                    # Get mapped ID for this item
-                    persistent_id = id_map[id(item)]
-                    
-                    # Map parent ID if it exists
-                    parent_id = None
-                    if item.parentItem() and isinstance(item.parentItem(), StickyNote):
-                        parent_id = id_map[id(item.parentItem())]
-                    
-                    # Collect children IDs (mapped)
-                    child_ids = []
-                    for child in item.childItems():
-                        if isinstance(child, StickyNote):
-                            child_ids.append(id_map[id(child)])
-                    
-                    # Store note data
-                    note_data = {
-                        'id': persistent_id,
-                        'x': pos.x(),
-                        'y': pos.y(),
-                        'width': item.rect.width(),
-                        'height': item.rect.height(),
-                        'title': item.title_item.toPlainText(),
-                        'description': item.desc_item.toPlainText(),
-                        'color': item.color.name(),
-                        'children': child_ids,
-                        'parent': parent_id,
-                        'arrangement_mode': item.arrangement_mode
-                    }
-                    diagram_data['notes'].append(note_data)
-            
-            # Save to file
+            # Write to file
             with open(file_path, 'w') as f:
-                import json
-                json.dump(diagram_data, f, indent=2)
+                json.dump(diagram_data, f, indent=4)
                 
+            # Update current file
+            self.auto_save_file = file_path
+            
+            QMessageBox.information(self, "Diagram Saved", f"Diagram saved to:\n{file_path}")
             print(f"Diagram saved to {file_path}")
             return True
             
@@ -2095,14 +2139,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"Failed to save diagram: {str(e)}")
             print(f"Error saving diagram: {str(e)}")
             return False
-            
-    def open_diagram(self):
-        """Open a diagram from a JSON file"""
-        file_name, _ = QFileDialog.getOpenFileName(self, "Open Diagram", "", 
-                                                  "JSON Files (*.json);;All Files (*)")
-        if file_name:
-            self.load_diagram(file_name)
-    
+
     def load_diagram(self, file_path):
         """Load a diagram from the specified file path"""
         try:
@@ -2182,6 +2219,249 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"Failed to load diagram: {str(e)}")
             print(f"Error loading diagram: {str(e)}")
             return False
+
+    def export_canvas(self):
+        """Export the current canvas in various formats (SVG, PNG, JPEG, PDF, HTML)"""
+        try:
+            # Get the bounding rectangle of all items in the scene
+            items_rect = self.scene.itemsBoundingRect()
+            
+            # Add some padding
+            padding = 20
+            items_rect.adjust(-padding, -padding, padding, padding)
+            
+            # Ensure we capture at least the visible area if no items exist
+            if items_rect.isEmpty():
+                items_rect = self.view.mapToScene(self.view.viewport().rect()).boundingRect()
+            
+            # Show file dialog to get export location and format
+            options = QFileDialog.Options()
+            file_filters = "SVG Images (*.svg);;PNG Images (*.png);;JPEG Images (*.jpg *.jpeg);;PDF Documents (*.pdf);;HTML Documents (*.html);;All Files (*)"
+            file_path, selected_filter = QFileDialog.getSaveFileName(
+                self, "Export Canvas As", "", file_filters, options=options
+            )
+            
+            if not file_path:
+                print("Export cancelled by user")
+                return
+                
+            # Determine the format based on the selected filter or file extension
+            selected_format = ""
+            if "SVG" in selected_filter:
+                selected_format = "SVG"
+                if not file_path.lower().endswith('.svg'):
+                    file_path += '.svg'
+            elif "PNG" in selected_filter:
+                selected_format = "PNG"
+                if not file_path.lower().endswith('.png'):
+                    file_path += '.png'
+            elif "JPEG" in selected_filter or "JPG" in selected_filter:
+                selected_format = "JPEG"
+                if not file_path.lower().endswith(('.jpg', '.jpeg')):
+                    file_path += '.jpg'
+            elif "PDF" in selected_filter:
+                selected_format = "PDF"
+                if not file_path.lower().endswith('.pdf'):
+                    file_path += '.pdf'
+            elif "HTML" in selected_filter:
+                selected_format = "HTML"
+                if not file_path.lower().endswith('.html'):
+                    file_path += '.html'
+            else:
+                # Determine format from file extension
+                if file_path.lower().endswith('.svg'):
+                    selected_format = "SVG"
+                elif file_path.lower().endswith('.png'):
+                    selected_format = "PNG"
+                elif file_path.lower().endswith(('.jpg', '.jpeg')):
+                    selected_format = "JPEG"
+                elif file_path.lower().endswith('.pdf'):
+                    selected_format = "PDF"
+                elif file_path.lower().endswith('.html'):
+                    selected_format = "HTML"
+                else:
+                    # Default to PNG if no extension is recognized
+                    selected_format = "PNG"
+                    file_path += '.png'
+            
+            # Handle SVG export (vector format)
+            if selected_format == "SVG":
+                # Create an SVG generator
+                generator = QSvgGenerator()
+                generator.setFileName(file_path)
+                generator.setSize(QSizeF(items_rect.width(), items_rect.height()).toSize())
+                generator.setViewBox(QRectF(0, 0, items_rect.width(), items_rect.height()))
+                generator.setTitle("Sticky Notes Diagram")
+                generator.setDescription("Generated from the Sticky Notes application")
+                
+                # Create a painter to render the scene to SVG
+                painter = QPainter(generator)
+                painter.setRenderHint(QPainter.Antialiasing)
+                painter.setRenderHint(QPainter.TextAntialiasing)
+                
+                # Set the background color
+                background_color = self.scene.backgroundBrush().color()
+                painter.fillRect(QRectF(0, 0, items_rect.width(), items_rect.height()), background_color)
+                
+                # Render the scene
+                self.scene.render(painter, QRectF(0, 0, items_rect.width(), items_rect.height()), items_rect)
+                painter.end()
+                
+                print(f"Canvas exported as SVG: {file_path}")
+                
+            # Handle PDF export
+            elif selected_format == "PDF":
+                # Create a PDF printer/writer
+                printer = QPrinter(QPrinter.HighResolution)
+                printer.setOutputFormat(QPrinter.PdfFormat)
+                printer.setOutputFileName(file_path)
+                printer.setPaperSize(QSizeF(items_rect.width(), items_rect.height()), QPrinter.Point)
+                printer.setPageMargins(0, 0, 0, 0, QPrinter.Point)
+                
+                # Create a painter to render the scene to PDF
+                painter = QPainter(printer)
+                painter.setRenderHint(QPainter.Antialiasing)
+                painter.setRenderHint(QPainter.TextAntialiasing)
+                
+                # Set the background color
+                background_color = self.scene.backgroundBrush().color()
+                painter.fillRect(QRectF(0, 0, items_rect.width(), items_rect.height()), background_color)
+                
+                # Render the scene
+                self.scene.render(painter, QRectF(0, 0, items_rect.width(), items_rect.height()), items_rect)
+                painter.end()
+                
+                print(f"Canvas exported as PDF: {file_path}")
+                
+            # Handle HTML export
+            elif selected_format == "HTML":
+                # First, export as SVG for embedding in HTML
+                temp_svg_path = file_path.replace('.html', '.svg')
+                
+                # Create an SVG generator
+                generator = QSvgGenerator()
+                generator.setFileName(temp_svg_path)
+                generator.setSize(QSizeF(items_rect.width(), items_rect.height()).toSize())
+                generator.setViewBox(QRectF(0, 0, items_rect.width(), items_rect.height()))
+                generator.setTitle("Sticky Notes Diagram")
+                generator.setDescription("Generated from the Sticky Notes application")
+                
+                # Create a painter to render the scene to SVG
+                painter = QPainter(generator)
+                painter.setRenderHint(QPainter.Antialiasing)
+                painter.setRenderHint(QPainter.TextAntialiasing)
+                
+                # Set the background color
+                background_color = self.scene.backgroundBrush().color()
+                painter.fillRect(QRectF(0, 0, items_rect.width(), items_rect.height()), background_color)
+                
+                # Render the scene
+                self.scene.render(painter, QRectF(0, 0, items_rect.width(), items_rect.height()), items_rect)
+                painter.end()
+                
+                # Create a minimal HTML file with the SVG embedded
+                html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Notebox Diagram</title>
+    <style>
+        body {{ 
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }}
+        svg {{ 
+            width: 100%;
+            height: 100vh;
+            display: block;
+        }}
+    </style>
+</head>
+<body>
+    <img src="{os.path.basename(temp_svg_path)}" alt="Notebox Diagram">
+</body>
+</html>
+"""
+                # Write HTML file
+                with open(file_path, 'w') as f:
+                    f.write(html_content)
+                
+                print(f"Canvas exported as HTML: {file_path} (with associated SVG image)")
+            
+            else:
+                # Handle raster formats (PNG, JPEG)
+                # Create an image large enough to contain the entire scene
+                image = QImage(int(items_rect.width()), int(items_rect.height()), QImage.Format_ARGB32)
+                image.fill(Qt.transparent)
+                
+                # Create a painter to render the scene to the image
+                painter = QPainter(image)
+                painter.setRenderHint(QPainter.Antialiasing)
+                painter.setRenderHint(QPainter.TextAntialiasing)
+                painter.setRenderHint(QPainter.SmoothPixmapTransform)
+                
+                # Set the background color
+                background_color = self.scene.backgroundBrush().color()
+                painter.fillRect(image.rect(), background_color)
+                
+                # Render the scene
+                self.scene.render(painter, QRectF(image.rect()), items_rect)
+                painter.end()
+                
+                # Save the image in the selected format
+                quality = 90 if selected_format == "JPEG" else -1  # Quality for JPEG, ignored for others
+                if image.save(file_path, selected_format, quality):
+                    print(f"Canvas exported as {selected_format}: {file_path}")
+                else:
+                    QMessageBox.warning(self, "Error", f"Failed to export the image in {selected_format} format.")
+                    print(f"Failed to export the image in {selected_format} format")
+                    return
+            
+            # Show success message
+            QMessageBox.information(self, "Export Successful", f"Canvas successfully exported as {selected_format} to:\n{file_path}")
+            
+            # Open the exported file with the default application
+            try:
+                # Use the platform-appropriate method to open the file
+                if sys.platform == 'win32':
+                    os.startfile(file_path)
+                elif sys.platform == 'darwin':  # macOS
+                    subprocess.call(['open', file_path])
+                else:  # Linux
+                    subprocess.call(['xdg-open', file_path])
+            except Exception as e:
+                print(f"Error opening exported file: {str(e)}")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Export Error", f"Failed to export the canvas: {str(e)}")
+            print(f"Error exporting canvas: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
+    def create_window_icon(self):
+        """Create a custom window icon with a simple box"""
+        try:
+            # Create a pixmap for the icon
+            icon_size = 64
+            icon_pixmap = QPixmap(icon_size, icon_size)
+            icon_pixmap.fill(Qt.transparent)
+            
+            # Draw a box icon on the pixmap
+            painter = QPainter(icon_pixmap)
+            painter.setRenderHint(QPainter.Antialiasing)
+            
+            # Draw a simple box
+            painter.setPen(QPen(QColor(0, 0, 0), 3))
+            painter.setBrush(QBrush(QColor(40, 40, 40)))
+            painter.drawRect(10, 10, icon_size - 20, icon_size - 20)
+            
+            painter.end()
+            
+            # Create icon from pixmap and set as window icon
+            icon = QIcon(icon_pixmap)
+            self.setWindowIcon(icon)
+        except Exception as e:
+            print(f"Error creating window icon: {str(e)}")
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
