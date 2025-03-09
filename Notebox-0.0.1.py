@@ -145,6 +145,59 @@ class DiagramView(QGraphicsView):
         if hasattr(self, 'parent') and self.parent() and isinstance(self.parent(), MainWindow):
             self.parent().setWindowTitle("Sticky Notes")
 
+    def contextMenuEvent(self, event):
+        # Convert the view position to scene coordinates
+        scene_pos = self.mapToScene(event.pos())
+        
+        # Get items at this position
+        items_at_pos = self.scene().items(scene_pos)
+        
+        # Only show context menu in empty space (no items at this position)
+        if not items_at_pos:
+            # Create and show context menu
+            context_menu = QMenu(self)
+            
+            # Set dark style for the menu
+            context_menu.setStyleSheet("""
+                QMenu {
+                    background-color: #2b2b2b;
+                    color: #e0e0e0;
+                    border: 1px solid #3c3c3c;
+                    padding: 5px;
+                }
+                QMenu::item {
+                    padding: 5px 30px 5px 20px;
+                }
+                QMenu::item:selected {
+                    background-color: #3c3c3c;
+                }
+            """)
+            
+            # Add menu actions
+            new_note_action = context_menu.addAction("New Note")
+            refresh_action = context_menu.addAction("Refresh")
+            fit_to_view_action = context_menu.addAction("Fit to View")
+            
+            # Show the context menu and get the selected action
+            action = context_menu.exec_(event.globalPos())
+            
+            # Handle the selected action
+            if action == new_note_action:
+                main_window = self.window()
+                if hasattr(main_window, 'addNoteAt'):
+                    main_window.addNoteAt(scene_pos)
+            elif action == refresh_action:
+                main_window = self.window()
+                if hasattr(main_window, 'refresh_all_notes'):
+                    main_window.refresh_all_notes()
+            elif action == fit_to_view_action:
+                self.reset_view()
+            
+            event.accept()
+        else:
+            # Pass the event to the parent class
+            super().contextMenuEvent(event)
+            
 class AddNoteCommand(QUndoCommand):
     def __init__(self, scene, note):
         super().__init__()
@@ -2554,6 +2607,37 @@ class MainWindow(QMainWindow):
             self.setWindowIcon(icon)
         except Exception as e:
             print(f"Error creating window icon: {str(e)}")
+
+    def addNoteAt(self, position):
+        """Add a new note at the specified position in the scene"""
+        # Create note at the specified position
+        note = StickyNote(position.x() - 100, position.y() - 50, 200, 100)  # Offset by half width/height
+
+        # Set highest Z value to ensure it's on top
+        highest_z = max((item.zValue() for item in self.scene.items()), default=0)
+        note.setZValue(highest_z + 1)
+        
+        # Add the note with undo functionality
+        command = AddNoteCommand(self.scene, note)
+        self.undo_stack.push(command)
+        
+        # Clear selection from all other notes
+        for item in self.scene.items():
+            if isinstance(item, StickyNote):
+                item.is_selected = False
+                item.update()
+        
+        # Select the new note
+        note.is_selected = True
+        note.update()
+        
+        # Update the arrangement controls
+        self.update_arrangement_controls(note)
+        
+        # Initialize note color based on nesting level
+        note.update_color_for_nesting()
+        
+        print(f"Added new note at position ({position.x()}, {position.y()})")
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
