@@ -138,6 +138,9 @@ class AddNoteCommand(QUndoCommand):
         self.scene.removeItem(self.note)
 
     def redo(self):
+        # Set highest Z value to ensure it's on top
+        highest_z = max((item.zValue() for item in self.scene.items()), default=0)
+        self.note.setZValue(highest_z + 1)
         self.scene.addItem(self.note)
 
 class DuplicateNoteCommand(QUndoCommand):
@@ -151,6 +154,9 @@ class DuplicateNoteCommand(QUndoCommand):
         self.scene.removeItem(self.new_note)
         
     def redo(self):
+        # Set highest Z value to ensure it's on top
+        highest_z = max((item.zValue() for item in self.scene.items()), default=0)
+        self.new_note.setZValue(highest_z + 1)
         self.scene.addItem(self.new_note)
 
 class DeleteNoteCommand(QUndoCommand):
@@ -308,7 +314,15 @@ class StickyNote(QGraphicsItem):
                 main_window.update_arrangement_controls(self)
 
         if event.button() == Qt.LeftButton:
-            self.setZValue(2)  # Bring to front while dragging
+            # Find the highest Z value in the scene and set this note to one higher
+            highest_z = 1
+            if self.scene():
+                for item in self.scene().items():
+                    if isinstance(item, StickyNote) and item != self:
+                        highest_z = max(highest_z, item.zValue())
+            
+            # Bring to front by setting Z value higher than all other notes
+            self.setZValue(highest_z + 1)
             self.setCursor(Qt.ClosedHandCursor)  # Use the cursor enum directly
         
         # Call the parent class method to ensure proper event handling
@@ -493,21 +507,36 @@ class StickyNote(QGraphicsItem):
             pos = self.mapToScene(event.pos())
             items = self.scene().items(pos)
 
-            # Check for potential containers to highlight
+            # First reset all notes to their base color
             for item in self.scene().items():
                 if isinstance(item, StickyNote) and item != self:
                     item.color = item.base_color  # Reset to base color
                     item.update()
 
-            # Highlight potential container under cursor
+            # Highlight potential container under cursor - only if it's a valid target
+            potential_container = None
             for item in items:
                 if isinstance(item, StickyNote) and item != self:
-                    item.color = QColor(80, 100, 140)  # Highlight with a brighter blue for dark theme
-                    item.update()
-                    break
+                    # Check if this note is not contained by the current note (prevents circular containment)
+                    current = item
+                    is_descendant = False
+                    while current:
+                        if current.contained_by == self:
+                            is_descendant = True
+                            break
+                        current = current.contained_by
+                    
+                    if not is_descendant:
+                        potential_container = item
+                        break
+            
+            # Highlight the potential container if found
+            if potential_container:
+                potential_container.color = QColor(80, 100, 140)  # Bright blue for dark theme
+                potential_container.update()
 
     def mouseReleaseEvent(self, event):
-        self.setZValue(1)
+        # Keep the current Z-value (don't reset it) to maintain stacking order
         self.setCursor(Qt.ArrowCursor)
         
         # Reset opacity to fully opaque
@@ -529,9 +558,18 @@ class StickyNote(QGraphicsItem):
         if was_dragging and self.contained_by and drag_target >= 0:
             self.rearrange_at_position(drag_target)
 
+        # First, find if any note was highlighted during dragging
+        highlighted_container = None
+        for item in self.scene().items():
+            if isinstance(item, StickyNote) and item != self and item.color != item.base_color:
+                # This note was highlighted
+                highlighted_container = item
+                break
+                
         # Get items under cursor for container detection
-        scene_pos = self.scenePos()
-        items = self.scene().items(scene_pos)
+        # Use cursor position instead of note position
+        cursor_scene_pos = self.mapToScene(event.pos())
+        items = self.scene().items(cursor_scene_pos)
 
         # Reset highlight colors (blue highlighting during drag)
         for item in self.scene().items():
@@ -540,22 +578,39 @@ class StickyNote(QGraphicsItem):
                 item.update_color_for_nesting()
                 item.update()
 
-        # Find potential container
+        # Find potential container - prefer the highlighted container if available
         container = None
-        for item in items:
-            if isinstance(item, StickyNote) and item != self:
-                # Check if this note is not contained by the current note (prevents circular containment)
-                current = item
-                is_descendant = False
-                while current:
-                    if current.contained_by == self:
-                        is_descendant = True
-                        break
-                    current = current.contained_by
-                
-                if not is_descendant:
-                    container = item
+        
+        # If we found a highlighted container during dragging, use it
+        if highlighted_container:
+            # Check if this note is not contained by the current note (prevents circular containment)
+            current = highlighted_container
+            is_descendant = False
+            while current:
+                if current.contained_by == self:
+                    is_descendant = True
                     break
+                current = current.contained_by
+            
+            if not is_descendant:
+                container = highlighted_container
+        
+        # If no highlighted container was found, fall back to items under cursor
+        if not container:
+            for item in items:
+                if isinstance(item, StickyNote) and item != self:
+                    # Check if this note is not contained by the current note (prevents circular containment)
+                    current = item
+                    is_descendant = False
+                    while current:
+                        if current.contained_by == self:
+                            is_descendant = True
+                            break
+                        current = current.contained_by
+                    
+                    if not is_descendant:
+                        container = item
+                        break
 
         # Save our current container for reference
         old_container = self.contained_by
@@ -1278,15 +1333,22 @@ class StickyNote(QGraphicsItem):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        
+        # Initialize the scene and view
+        self.scene = QGraphicsScene(self)
+        self.scene.setSceneRect(0, 0, 10000, 10000)
+        self.view = DiagramView(self.scene)
+        
+        # Set up undo stack
         self.undo_stack = QUndoStack(self)
+        
+        # Initialize variables for notes management
+        self.notes_data = {}
         self.selected_note = None
+        self.file_path = None
+        self.last_save_state = None
         
-        # Set up auto-save timer
-        self.auto_save_interval = 5 * 60 * 1000  # 5 minutes in milliseconds
-        self.auto_save_timer = None
-        self.auto_save_enabled = False
-        self.auto_save_file = None
-        
+        # Initialize UI
         self.initUI()
 
     def initUI(self):
@@ -1361,7 +1423,8 @@ class MainWindow(QMainWindow):
         refresh_button = QPushButton("🔄")
         refresh_button.clicked.connect(self.refresh_all_notes)
         refresh_button.setFixedWidth(40)
-        refresh_button.setToolTip("Refresh all notes")
+        refresh_button.setToolTip("Refresh all notes (reorganize and recalculate sizes)")
+        refresh_button.setStyleSheet("color: #4caf50;")  # Green color for the icon
         
         # Add reset view button
         reset_view_button = QPushButton("🏠")
@@ -1369,16 +1432,10 @@ class MainWindow(QMainWindow):
         reset_view_button.setFixedWidth(40)
         reset_view_button.setToolTip("Reset view")
         
-        # Add auto-save toggle button
-        self.auto_save_button = QPushButton("🔄 Auto-Save: Off")
-        self.auto_save_button.clicked.connect(self.toggle_auto_save)
-        self.auto_save_button.setFixedWidth(150)
-        self.auto_save_button.setToolTip("Toggle automatic saving")
-        
         # Add export button
-        export_button = QPushButton("📤 Export")
+        export_button = QPushButton("💾")
         export_button.clicked.connect(self.export_canvas)
-        export_button.setFixedWidth(80)
+        export_button.setFixedWidth(40)
         export_button.setToolTip("Export diagram (Ctrl+E)")
         
         # Add buttons to toolbar
@@ -1386,8 +1443,6 @@ class MainWindow(QMainWindow):
         toolbar_layout.addWidget(delete_button)
         toolbar_layout.addWidget(refresh_button)
         toolbar_layout.addWidget(reset_view_button)
-        toolbar_layout.addWidget(self.auto_save_button)
-        
         toolbar_layout.addWidget(export_button)
         
         # Add separator
@@ -1399,28 +1454,21 @@ class MainWindow(QMainWindow):
         # Add spacer to push alignment buttons to the right
         toolbar_layout.addSpacing(20)
         
-        # Add alignment label
-        alignment_label = QPushButton("Align:")
-        alignment_label.setFlat(True)
-        alignment_label.setFixedWidth(100)
-        alignment_label.setEnabled(False)
-        toolbar_layout.addWidget(alignment_label)
-        
         # Create individual buttons for each alignment mode
-        self.free_button = QPushButton("🔓 Free")
+        self.free_button = QPushButton("🖱️ Free")
         self.free_button.setToolTip("Free alignment: Notes can be dragged anywhere")
         self.free_button.setCheckable(True)
         self.free_button.setChecked(True)  # Default to free mode
         self.free_button.clicked.connect(lambda: self.set_arrangement_mode('free'))
         self.free_button.setFixedWidth(90)
         
-        self.rows_button = QPushButton("⬇️ Rows")
+        self.rows_button = QPushButton("→ Rows")
         self.rows_button.setToolTip("Stack notes in rows")
         self.rows_button.setCheckable(True)
         self.rows_button.clicked.connect(lambda: self.set_arrangement_mode('rows'))
         self.rows_button.setFixedWidth(90)
         
-        self.columns_button = QPushButton("➡️ Columns")
+        self.columns_button = QPushButton("↓ Columns")
         self.columns_button.setToolTip("Arrange notes in columns")
         self.columns_button.setCheckable(True)
         self.columns_button.clicked.connect(lambda: self.set_arrangement_mode('columns'))
@@ -2076,28 +2124,6 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"An error occurred while saving the image:\n{str(e)}")
             print(f"Error saving canvas as image: {str(e)}")
 
-    def toggle_auto_save(self):
-        """Toggle automatic saving on/off"""
-        self.auto_save_enabled = not self.auto_save_enabled
-        
-        if self.auto_save_enabled:
-            self.auto_save_button.setText("🔄 Auto-Save: On")
-            # Start the timer if not already started
-            if not self.auto_save_timer.isActive():
-                self.auto_save_timer.start(30000)  # 30 seconds
-        else:
-            self.auto_save_button.setText("🔄 Auto-Save: Off")
-            # Stop the timer
-            if self.auto_save_timer.isActive():
-                self.auto_save_timer.stop()
-
-    def timerEvent(self, event):
-        # Auto-save the canvas
-        if event.timerId() == self.auto_save_timer.timerId():
-            if self.auto_save_enabled and self.auto_save_file:
-                self.save_diagram(self.auto_save_file)
-                print(f"Auto-saved to {self.auto_save_file}")
-
     def save_diagram_as(self):
         """Save the diagram to a JSON file"""
         file_name, _ = QFileDialog.getSaveFileName(self, "Save Diagram", "", 
@@ -2113,6 +2139,34 @@ class MainWindow(QMainWindow):
                 "notes": []
             }
             
+            # Helper function to recursively save a note and its children
+            def _save_note_recursive(note):
+                # Get note position in scene coordinates
+                pos = note.scenePos()
+                
+                # Create data dictionary for this note
+                note_data = {
+                    'id': id(note),
+                    'x': pos.x(),
+                    'y': pos.y(),
+                    'width': note.rect.width(),
+                    'height': note.rect.height(),
+                    'title': note.title_item.toPlainText(),
+                    'description': note.desc_item.toPlainText(),
+                    'color': note.color.name(),
+                    'arrangement_mode': note.arrangement_mode,
+                    'parent': id(note.contained_by) if note.contained_by else None,
+                    'z_value': note.zValue()  # Save the Z-value
+                }
+                
+                # Process children
+                for child in note.childItems():
+                    if isinstance(child, StickyNote):
+                        child_data = _save_note_recursive(child)
+                        diagram_data["notes"].append(child_data)
+                
+                return note_data
+            
             # Get all notes in the scene
             for item in self.scene.items():
                 if isinstance(item, StickyNote):
@@ -2121,7 +2175,7 @@ class MainWindow(QMainWindow):
                         continue
                         
                     # Get note data
-                    note_data = self._save_note_recursive(item)
+                    note_data = _save_note_recursive(item)
                     diagram_data["notes"].append(note_data)
             
             # Write to file
@@ -2129,7 +2183,7 @@ class MainWindow(QMainWindow):
                 json.dump(diagram_data, f, indent=4)
                 
             # Update current file
-            self.auto_save_file = file_path
+            self.file_path = file_path
             
             QMessageBox.information(self, "Diagram Saved", f"Diagram saved to:\n{file_path}")
             print(f"Diagram saved to {file_path}")
@@ -2171,7 +2225,14 @@ class MainWindow(QMainWindow):
                     note.desc_item.setPlainText(note_data['description'])
                 elif 'text' in note_data:
                     # Handle old format with single text content
-                    note.desc_item.setPlainText(note_data['text'])
+                    note.title_item.setPlainText(note_data['text'])
+                
+                # Set z-value if it was saved, otherwise use incremental z-values
+                if 'z_value' in note_data:
+                    note.setZValue(note_data['z_value'])
+                else:
+                    # Assign sequential z-values to maintain front-to-back order
+                    note.setZValue(len(notes_dict) + 1 - len(notes_dict))
                 
                 # Set color and arrangement mode
                 note.color = QColor(note_data['color'])
