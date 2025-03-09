@@ -1417,42 +1417,42 @@ class MainWindow(QMainWindow):
         
         # Create toolbar widget with fixed height
         toolbar = QWidget()
-        toolbar.setFixedHeight(60)
+        toolbar.setFixedHeight(45)  # Reduced from 60 to 45 (0.75x thickness)
         toolbar.setStyleSheet("background-color: #363636;")
         
         # Create horizontal layout for toolbar
         toolbar_layout = QHBoxLayout(toolbar)
-        toolbar_layout.setContentsMargins(10, 5, 10, 5)
+        toolbar_layout.setContentsMargins(10, 3, 10, 3)  # Reduced vertical margins from 5 to 3
         
         # Add Note section
         add_button = QPushButton("+ New Note")
         add_button.clicked.connect(self.addNote)
-        add_button.setFixedWidth(120)
+        add_button.setFixedWidth(150)  # Increased from 120
         
         # Add delete button with red color
         delete_button = QPushButton("🗑️")
         delete_button.setObjectName("delete_button")  # For CSS styling
         delete_button.clicked.connect(self.delete_selected_note)
-        delete_button.setFixedWidth(40)
+        delete_button.setFixedWidth(50)  # Increased from 40
         delete_button.setToolTip("Delete Selected Note (Delete)")
         
         # Add refresh button
         refresh_button = QPushButton("🔄")
         refresh_button.clicked.connect(self.refresh_all_notes)
-        refresh_button.setFixedWidth(40)
+        refresh_button.setFixedWidth(50)  # Increased from 40
         refresh_button.setToolTip("Refresh all notes (reorganize and recalculate sizes)")
         refresh_button.setStyleSheet("color: #4caf50;")  # Green color for the icon
         
         # Add reset view button
         reset_view_button = QPushButton("🔍")  # Changed from 🏠 to 🔍 for zoom/fit
         reset_view_button.clicked.connect(self.view.reset_view)
-        reset_view_button.setFixedWidth(40)
+        reset_view_button.setFixedWidth(50)  # Increased from 40
         reset_view_button.setToolTip("Fit all notes in view")
         
         # Add export button
         export_button = QPushButton("💾")
         export_button.clicked.connect(self.export_canvas)
-        export_button.setFixedWidth(40)
+        export_button.setFixedWidth(50)  # Increased from 40
         export_button.setToolTip("Export diagram (Ctrl+E)")
         
         # Add buttons to toolbar
@@ -1477,19 +1477,19 @@ class MainWindow(QMainWindow):
         self.free_button.setCheckable(True)
         self.free_button.setChecked(True)  # Default to free mode
         self.free_button.clicked.connect(lambda: self.set_arrangement_mode('free'))
-        self.free_button.setFixedWidth(90)
+        self.free_button.setFixedWidth(110)  # Increased from 90
         
         self.rows_button = QPushButton("→ Rows")
         self.rows_button.setToolTip("Stack notes in rows")
         self.rows_button.setCheckable(True)
         self.rows_button.clicked.connect(lambda: self.set_arrangement_mode('rows'))
-        self.rows_button.setFixedWidth(90)
+        self.rows_button.setFixedWidth(110)  # Increased from 90
         
         self.columns_button = QPushButton("↓ Columns")
         self.columns_button.setToolTip("Arrange notes in columns")
         self.columns_button.setCheckable(True)
         self.columns_button.clicked.connect(lambda: self.set_arrangement_mode('columns'))
-        self.columns_button.setFixedWidth(90)
+        self.columns_button.setFixedWidth(110)  # Increased from 90
         
         # Add alignment buttons to toolbar
         toolbar_layout.addWidget(self.free_button)
@@ -1519,20 +1519,30 @@ class MainWindow(QMainWindow):
                 background-color: #4a4a4a; 
                 color: #ffffff; 
                 border: none; 
-                padding: 8px;
-                border-radius: 4px;
+                padding: 6px;
+                border-radius: 3px;
                 margin: 2px;
+                font-size: 16px; /* Increased font size for toolbar text */
+                font-weight: 500;
+            }
+            /* Special style for emoji buttons with even larger font */
+            QPushButton[text="🗑️"], QPushButton[text="🔄"], QPushButton[text="🔍"], QPushButton[text="💾"] {
+                font-size: 20px; /* Larger font for emoji icons */
+                padding: 3px;
+                line-height: 1;
             }
             QPushButton:hover { background-color: #5a5a5a; }
             QPushButton:checked { 
                 background-color: #7289da; 
                 color: white;
                 font-weight: bold;
+                font-size: 16px; /* Keep same font size when checked */
             }
             QPushButton:disabled { 
                 background-color: transparent; 
                 color: #aaaaaa;
-                font-weight: bold; 
+                font-weight: bold;
+                font-size: 16px; /* Keep same font size when disabled */
             }
             QPushButton:flat { 
                 background-color: transparent;
