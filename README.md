@@ -60,10 +60,6 @@ Access export options through the Save/Load menu:
 - **D2**: Diagram scripting language (for code generation)
 - **SVG**: Vector graphics for export and rendering
 
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
 
 ## Installation
 
@@ -72,25 +68,3 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - Python 3.6 or higher
 - PyQt5
 - Additional dependencies listed in `requirements.txt`
-
-### Setup
-
-1. Clone the repository:
-   ```
-   git clone https://github.com/your-username/notebox-diagram-app.git
-   ```
-
-2. Navigate to the project directory:
-   ```
-   cd notebox-diagram-app
-   ```
-
-3. Install dependencies:
-   ```
-   pip install -r requirements.txt
-   ```
-
-4. Run the application:
-   ```
-   python Notebox_Testing.py
-   ```
