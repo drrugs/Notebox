@@ -1,8 +1,12 @@
 # Notebox Diagram App
-D2 Drag n Drop Diagram Designer - A powerful, intuitive D2 studio built with Python, Cursor (AI), and PyQt that makes it easy to create, edit, and export diagrams.
+D2 Drag n Drop Diagram Designer - A powerful, intuitive D2 studio vibecoded with Python, and PyQt that makes it easy to create, edit, and export diagrams fully compatible with the D2 diagraming language. 
+_Other Project Names: Notebox, nOD2On (notedown), NoD3Box_
 
+_v0.0.1x_
 <img src="https://github.com/user-attachments/assets/e3f0d434-1e8a-4c37-9d62-286a85ec993e" height="500" />
 
+_v0.0.3x_
+<img width="896" height="593" alt="Notebox-v0.0.34" src="https://github.com/user-attachments/assets/cc7d582f-9214-44c0-9fba-0fa48116f54f" />
 
 ## Features
 
